@@ -396,7 +396,7 @@ print_cluster_summary_table <- function(seg_list) {
 # -------------------------------------------
 
 # 1. Load and preprocess data
-file_path <- "C:/Users/jthom/OneDrive/Documents/GitHub/Customer_Churn_&_Retention_Strategy/Telco-Customer-Churn.csv"
+file_path <- "Telco-Customer-Churn.csv"
 data <- preprocess_data(file_path)
 
 # 2. Create folds for cross-validation (if needed for model eval)
