@@ -1,0 +1,533 @@
+#-----------------------------
+# Customer Churn Analysis Pipeline
+#-----------------------------
+
+# Load required libraries for data manipulation, modeling, visualization, and optimization
+library(tidyverse)      # Data manipulation and visualization
+library(caret)          # Model training and evaluation
+library(pROC)           # ROC curves and AUC calculation
+library(e1071)          # Naive Bayes classifier
+library(rpart)          # CART decision trees
+library(class)          # k-NN classification
+library(RColorBrewer)   # Color palettes for plots
+library(gridExtra)      # Arranging multiple plots
+library(ggpubr)         # Publication-ready ggplot functions
+library(Rglpk)          # Linear programming solver
+library(grid)           # Low-level grid graphics functions
+
+#----------------------- Helper Functions -----------------------
+
+# 1. Data preprocessing
+#    - Read CSV file and convert TotalCharges to numeric
+#    - Remove rows with missing TotalCharges
+#    - Encode Churn as a factor (0 = No, 1 = Yes)
+#    - Drop the customerID column
+#    - Create a ChargesBin variable categorizing MonthlyCharges into Low, Medium, High quartiles
+preprocess_data <- function(file_path) {
+  df <- read.csv(file_path, stringsAsFactors = FALSE)
+  df$TotalCharges <- as.numeric(df$TotalCharges)
+  df <- df %>% filter(!is.na(TotalCharges)) %>%
+    mutate(
+      Churn = factor(ifelse(Churn == "Yes", 1, 0), levels = c(0,1))
+    ) %>%
+    select(-customerID) %>%
+    mutate(
+      ChargesBin = cut(
+        MonthlyCharges,
+        breaks = quantile(MonthlyCharges, probs = seq(0,1, length.out = 4)),
+        include.lowest = TRUE,
+        labels = c("Low","Medium","High")
+      )
+    )
+  return(df)
+}
+
+# 2. Create stratified k-folds for cross-validation
+#    - Uses caret::createFolds to maintain class balance
+create_folds <- function(data, k = 10, seed = 123) {
+  set.seed(seed)
+  createFolds(data$Churn, k = k, list = TRUE)
+}
+
+# 3. Exploratory Data Analysis (EDA) plots
+#    - Pie chart of churn distribution
+#    - Histograms of tenure, MonthlyCharges, TotalCharges
+eda_plots <- function(data) {
+  pal <- brewer.pal(3, "Set2")
+  
+  # Compute churn counts and percentages
+  churn_cnt <- data %>% count(Churn) %>% mutate(pct = round(n/sum(n)*100,1))
+  churn_cnt$Churn <- factor(churn_cnt$Churn, labels = c("No","Yes"))
+  
+  #Pie chart showing churn breakdown
+  p_pie <- ggplot(churn_cnt, aes(x = "", y = n, fill = Churn)) +
+    geom_bar(stat = "identity", color = "white") +
+    coord_polar(theta = "y") +
+    geom_text(aes(label = paste0(pct, "%")), position = position_stack(vjust = 0.5), color = "white", size = 5, fontface = "bold") +
+    scale_fill_manual(values = c(No = pal[2], Yes = pal[3])) +
+    labs(title = "Customer Churn Distribution") + theme_minimal() +
+    theme(axis.text = element_blank(), axis.ticks = element_blank(), panel.grid = element_blank())
+  
+  # Histogram of customer tenure
+  p1 <- ggplot(data, aes(x = tenure)) + geom_histogram(binwidth = 1, fill = pal[1], color = "white") + labs(title = "Customer Tenure", x = "Tenure (Months)", y = "Count") + theme_minimal()
+  
+  # Density plot of monthly charges
+  p2 <- ggplot(data, aes(x = MonthlyCharges)) + geom_histogram(aes(y = ..density..), fill = pal[2], color = "white") + labs(title = "Monthly Charges", y = "Density") + theme_minimal()
+  
+  # Density plot of total charges
+  p3 <- ggplot(data, aes(x = TotalCharges)) + geom_histogram(aes(y = ..density..), fill = pal[3], color = "white") + labs(title = "Total Charges", y = "Density") + theme_minimal()
+  
+  # Display plots
+  print(p_pie)
+  grid.arrange(p1, p2, p3, ncol = 2)
+}
+
+# 4. Fit multiple models with cross-validation and collect evaluation metrics
+#    - Models: Logistic Regression, Naive Bayes, CART, k-NN
+#    - Metrics: Accuracy, Recall, Precision, F1, AUC
+fit_models_cv <- function(data, folds, thresholds = list(logit = 0.2451, nb = 0.234, cart = 0.25, knn_k = 9)) {
+  n <- nrow(data)
+  total_prob <- numeric(n) # Store predicted probabilities for logistic regression across folds
+  evals <- list(logit = list(), nb = list(), cart = list(), knn = list())
+  
+  for (i in seq_along(folds)) {
+    idx <- folds[[i]]
+    train <- data[-idx, ]; test <- data[idx, ]
+    
+    # Logistic Regression
+    m1 <- glm(Churn ~ ., data = train, family = "binomial")
+    p1 <- predict(m1, test, type = "response"); total_prob[idx] <- p1
+    c1 <- confusionMatrix(factor(ifelse(p1 > thresholds$logit, 1, 0), levels = c(0,1)), test$Churn, positive = "1")
+    evals$logit[[i]] <- c(
+      Accuracy = c1$overall['Accuracy'],
+      Recall = c1$byClass['Sensitivity'],
+      Precision = c1$byClass['Pos Pred Value'],
+      F1 = 2 * ((c1$byClass['Pos Pred Value'] * c1$byClass['Sensitivity']) /
+                  (c1$byClass['Pos Pred Value'] + c1$byClass['Sensitivity'])),
+      AUC = auc(roc(test$Churn, p1))
+    )
+    
+    # Naive Bayes
+    m2 <- naiveBayes(Churn ~ ., train); p2 <- predict(m2, test, type = "raw")[,2]
+    c2 <- confusionMatrix(factor(ifelse(p2 > thresholds$nb, 1, 0), levels = c(0,1)), test$Churn, positive = "1")
+    evals$nb[[i]] <- c(
+      Accuracy = c2$overall['Accuracy'],
+      Recall = c2$byClass['Sensitivity'],
+      Precision = c2$byClass['Pos Pred Value'],
+      F1 = 2 * ((c2$byClass['Pos Pred Value'] * c2$byClass['Sensitivity']) /
+                  (c2$byClass['Pos Pred Value'] + c2$byClass['Sensitivity'])),
+      AUC = auc(roc(test$Churn, p2))
+    )
+    
+    # CART
+    m3 <- rpart(Churn ~ ., train, method = "class", control = rpart.control(cp = 0.01))
+    p3 <- predict(m3, test, type = "prob")[,2]
+    c3 <- confusionMatrix(factor(ifelse(p3 > thresholds$cart, 1, 0), levels = c(0,1)), test$Churn, positive = "1")
+    evals$cart[[i]] <- c(
+      Accuracy = c3$overall['Accuracy'],
+      Recall = c3$byClass['Sensitivity'],
+      Precision = c3$byClass['Pos Pred Value'],
+      F1 = 2 * ((c3$byClass['Pos Pred Value'] * c3$byClass['Sensitivity']) /
+                  (c3$byClass['Pos Pred Value'] + c3$byClass['Sensitivity'])),
+      AUC = auc(roc(test$Churn, p3))
+    )
+    
+    # k-NN
+    norm <- preProcess(train %>% select(where(is.numeric), -Churn), method = c("center","scale"))
+    tr_n <- predict(norm, train %>% select(where(is.numeric), -Churn))
+    te_n <- predict(norm, test %>% select(where(is.numeric), -Churn))
+    kpred <- knn(tr_n, te_n, cl = factor(train$Churn, levels = c(0,1)), k = thresholds$knn_k)
+    c4 <- confusionMatrix(kpred, test$Churn, positive = "1")
+    evals$knn[[i]] <- c(
+      Accuracy = c4$overall['Accuracy'],
+      Recall = c4$byClass['Sensitivity'],
+      Precision = c4$byClass['Pos Pred Value'],
+      F1 = 2 * ((c4$byClass['Pos Pred Value'] * c4$byClass['Sensitivity']) /
+                  (c4$byClass['Pos Pred Value'] + c4$byClass['Sensitivity'])),
+      AUC = auc(roc(test$Churn, as.numeric(as.character(kpred))))
+    )
+  }
+  
+  # Compile evaluation data frames and attach total probabilities
+  results <- lapply(evals, function(x) as.data.frame(do.call(rbind, x)))
+  results$total_prob <- total_prob
+  return(results)
+}
+
+# 5. Plot summarized results: metrics table, ROC curve, F1 vs threshold, final confusion matrix
+plot_all_results <- function(results, data, threshold) {
+  models <- c("Logistic Regression","Naive Bayes","CART","k-NN")
+  dfs <- list(results$logit, results$nb, results$cart, results$knn)
+  
+  # Create summary table
+  summary_df <- map_df(seq_along(dfs), function(i) {
+    df <- dfs[[i]]
+    tibble(
+      Model = models[i],
+      Accuracy  = round(mean(df$Accuracy),  3),
+      Recall    = round(mean(df$Recall),    3),
+      Precision = round(mean(df$Precision), 3),
+      F1_Score  = round(mean(df$F1),        3),
+      AUC       = round(mean(df$AUC),       3)
+    )
+  })
+  tbl <- tableGrob(summary_df, rows = NULL)
+  grid.newpage(); grid.draw(tbl)
+  
+  # ROC curve for logistic regression
+  roc_obj <- roc(data$Churn, results$total_prob)
+  plot(roc_obj, main = paste("ROC Curve - Logistic Regression | AUC =", round(auc(roc_obj), 3)),
+       col = "#2c7fb8", lwd = 2)
+  abline(a = 0, b = 1, lty = 2, col = "gray")
+  
+  # F1 score vs. threshold
+  thresholds_seq <- seq(0.01, 0.99, by = 0.01)
+  f1_scores <- sapply(thresholds_seq, function(t) {
+    preds <- ifelse(results$total_prob > t, 1, 0)
+    cm <- confusionMatrix(factor(preds, levels = c(0,1)), data$Churn, positive = "1")
+    precision <- cm$byClass["Pos Pred Value"]
+    recall <- cm$byClass["Sensitivity"]
+    if (is.na(precision) || is.na(recall) || (precision + recall == 0)) return(0)
+    2 * (precision * recall) / (precision + recall)
+  })
+  
+  f1_df <- data.frame(Threshold = thresholds_seq, F1 = f1_scores)
+  
+  f1_plot <- ggplot(f1_df, aes(x = Threshold, y = F1)) +
+    geom_line(color = "#1b7837", size = 1.2) +
+    geom_point(
+      data = data.frame(Threshold = thresholds_seq[which.max(f1_scores)], F1 = max(f1_scores)),
+      aes(x = Threshold, y = F1),
+      color = "red", size = 3
+    ) +
+    annotate(
+      "text",
+      x = thresholds_seq[which.max(f1_scores)],
+      y = max(f1_scores),
+      label = paste0("Peak F1 = ", round(max(f1_scores), 3), " @ ", round(thresholds_seq[which.max(f1_scores)], 2)),
+      hjust = -0.1, vjust = -0.5, fontface = "bold"
+    ) +
+    labs(title = "F1 Score vs. Churn Threshold", x = "Threshold", y = "F1 Score") +
+    theme_minimal()
+  print(f1_plot)
+  
+  # Final confusion matrix at chosen threshold
+  preds_final <- ifelse(results$total_prob > threshold, 1, 0)
+  cm_final <- table(Predicted = preds_final, Actual = data$Churn)
+  
+  cm_df <- as.data.frame(cm_final)
+  names(cm_df) <- c("Predicted", "Actual", "Freq")
+  
+  #Confusion Matrix Plot
+  cm_plot <- ggplot(cm_df, aes(x = Actual, y = Predicted)) +
+    geom_tile(aes(fill = Freq), color = "white") +
+    geom_text(aes(label = Freq), size = 6, fontface = "bold") +
+    scale_fill_gradient(low = "#deebf7", high = "#3182bd") +
+    labs(title = paste("Confusion Matrix at Threshold =", threshold)) +
+    theme_minimal()
+  print(cm_plot)
+  
+}
+
+
+#----------------------------#
+# 6. Business Metrics & Decisions
+# a) Customer Lifetime and Costs
+#    - Calculate CLV, service cost, retention cost, and profit per customer
+calc_costs <- function(data, cost_rate = 0.4, discount_rate = 0.15, marketing_cost = 5) {
+  clv <- data$TotalCharges
+  cost_service   <- clv * cost_rate
+  retention_cost <- round(clv * discount_rate, 2) + marketing_cost
+  profitability  <- clv - cost_service - retention_cost
+  list(
+    CLV             = clv,
+    Cost_of_Service = cost_service,
+    Retention_Cost  = retention_cost,
+    Profitability   = profitability
+  )
+}
+
+# b) Rule-based retention decision
+#    - Determine if retention offer is worthwhile based on expected benefit
+rule_based_decision <- function(data, clv, cost_service, retention_cost, prob_churn, accept_rate = 0.7) {
+  expected_benefit <- (clv - cost_service) * prob_churn * accept_rate
+  keep_decision    <- ifelse(expected_benefit > retention_cost, "Yes", "No")
+  cost_data <- data %>%
+    mutate(
+      CLV              = clv,
+      Cost_of_Service  = cost_service,
+      Retention_Cost   = retention_cost,
+      probability_churn= prob_churn,
+      expected_benefit = expected_benefit,
+      Retention_Worth  = keep_decision
+    )
+  # Summary metrics for retained customers
+  count_keep      <- cost_data %>% filter(Retention_Worth == "Yes") %>% tally()
+  total_profit_adj<- cost_data %>% filter(Retention_Worth == "Yes") %>%
+    summarise(Total_Expected_Profit = round(sum(expected_benefit - Retention_Cost),2))
+  list(
+    cost_data      = cost_data,
+    count_retained = count_keep,
+    total_profit_adj = total_profit_adj
+  )
+}
+
+# c) Budget optimization via linear programming
+#    - Maximize profit given budget constraint
+optimize_budget <- function(cost_df, budget = 250000) {
+  df <- cost_df %>% filter(!is.na(expected_benefit))
+  profit_adj <- df$expected_benefit - df$Retention_Cost
+  costs      <- df$Retention_Cost
+  sol <- Rglpk_solve_LP(
+    obj   = profit_adj,
+    mat   = matrix(costs, nrow = 1),
+    dir   = "<=",
+    rhs   = budget,
+    types = rep("B", length(profit_adj)),
+    max   = TRUE
+  )
+  df$Retain_Optimized <- sol$solution
+  list(
+    solution_df    = df,
+    total_profit   = round(sum(df$Retain_Optimized * profit_adj),2),
+    total_customers= sum(df$Retain_Optimized)
+  )
+}
+
+#----------------------------#
+# 7. Customer Segmentation & Elbow Method
+#    - Determine optimal K and segment customers via k-means
+choose_k_elbow <- function(cluster_numeric, k_range = 1:10) {
+  wss <- sapply(k_range, function(k) kmeans(scale(cluster_numeric), centers = k, nstart = 25)$tot.withinss)
+  plot(k_range, wss, type = "b", pch = 19,
+       xlab = "Number of Clusters (K)", ylab = "Total Within-Cluster SS",
+       main = "Elbow Method for Choosing K")
+}
+
+segment_customers <- function(cost_df, original_data, n_clusters = 3) {
+  cluster_df   <- original_data %>% select(-ChargesBin, -TotalCharges, -MonthlyCharges) %>% na.omit()
+  cluster_input<- cluster_df %>% select(-Churn)
+  dummies      <- dummyVars(" ~ .", data = cluster_input)
+  cluster_num  <- predict(dummies, newdata = cluster_input)
+  choose_k_elbow(cluster_num)
+  set.seed(123)
+  km <- kmeans(scale(cluster_num), centers = n_clusters, nstart = 25)
+  pca_out <- prcomp(scale(cluster_num))
+  pca_df  <- data.frame(pca_out$x[,1:2], cluster = factor(km$cluster))
+  df_with_cluster <- bind_cols(cost_df %>% slice(as.numeric(rownames(pca_df))),
+                               cluster_id = km$cluster)
+  list(df = df_with_cluster, pca_df = pca_df)
+}
+
+# Plot PCA clusters with churn annotation
+plot_cluster_pca <- function(seg_list) {
+  df     <- seg_list$df
+  pca_df <- seg_list$pca_df
+  avg_churn <- df %>%
+    group_by(cluster_id) %>%
+    summarise(avg_churn = mean(as.numeric(as.character(Churn)), na.rm = TRUE))
+  centroids <- pca_df %>%
+    mutate(cluster_id = as.integer(as.character(cluster))) %>%
+    left_join(avg_churn, by = "cluster_id") %>%
+    group_by(cluster_id) %>%
+    summarise(
+      PC1       = mean(PC1),
+      PC2       = mean(PC2),
+      avg_churn = first(avg_churn)
+    )
+  
+  # Create PCA scatter plot with annotations
+  p <- ggplot(pca_df, aes(PC1, PC2, color = cluster)) +
+    geom_point(alpha = 0.6) +
+    labs(title = "Customer Segments (PCA)") +
+    theme_minimal() +
+    geom_text(
+      data = centroids,
+      aes(x = PC1, y = PC2, label = sprintf("Avg churn: %.1f%%", avg_churn * 100)),
+      inherit.aes = FALSE,
+      color = "black",
+      fontface = "bold",
+      vjust = -1
+    )
+  
+  print(p)
+}
+
+# Print a summary table of cluster characteristics
+print_cluster_summary_table <- function(seg_list) {
+  df <- seg_list$df
+  
+  summary_table <- df %>%
+    group_by(cluster_id) %>%
+    summarise(
+      `Percent Female`       = round(mean(gender == "Female"), 2),
+      `Percent Senior`       = round(mean(SeniorCitizen == 1), 2),
+      `Percent Partner`      = round(mean(Partner == "Yes"), 2),
+      `Percent Dependents`   = round(mean(Dependents == "Yes"), 2),
+      `Avg Tenure`           = round(mean(tenure, na.rm = TRUE), 2),
+      `% Month-to-Month`     = round(mean(Contract == "Month-to-month"), 2),
+      `% Paperless Billing`  = round(mean(PaperlessBilling == "Yes"), 2),
+      `% Autopay`            = round(mean(PaymentMethod %in% c("Bank transfer (automatic)", "Credit card (automatic)")), 2),
+      `Avg Monthly Charges`  = round(mean(MonthlyCharges), 2),
+      `Avg Total Charges`    = round(mean(TotalCharges), 2),
+      `% Phone Service`      = round(mean(PhoneService == "Yes"), 2),
+      `% Multiple Lines`     = round(mean(MultipleLines == "Yes"), 2),
+      `% Fiber Internet`     = round(mean(InternetService == "Fiber optic"), 2),
+      `% Online Security`    = round(mean(OnlineSecurity == "Yes"), 2),
+      `% Tech Support`       = round(mean(TechSupport == "Yes"), 2),
+      `% Streaming Services` = round(mean(StreamingTV == "Yes" | StreamingMovies == "Yes"), 2)
+    )
+  
+  summary_long <- summary_table %>%
+    pivot_longer(cols = -cluster_id, names_to = "Metric", values_to = "Value")
+  
+  summary_wide <- summary_long %>%
+    pivot_wider(names_from = cluster_id, values_from = Value, names_prefix = "Cluster_")
+  
+  tbl <- ggtexttable(summary_wide, rows = NULL, theme = ttheme("light"))
+  
+  grid.newpage()
+  grid.draw(tbl)
+}
+
+
+# -------------------------------------------
+# Execution Script
+# -------------------------------------------
+
+# 1. Load and preprocess data
+file_path <- "C:/Users/jthom/OneDrive/Documents/GitHub/Customer_Churn_&_Retention_Strategy/Telco-Customer-Churn.csv"
+data <- preprocess_data(file_path)
+
+# 2. Create folds for cross-validation (if needed for model eval)
+folds <- create_folds(data)
+
+# 3. Perform EDA (optional visualizations)
+eda_plots(data)
+
+# 4. Fit CV models and evaluate performance
+results <- fit_models_cv(data, folds)
+plot_all_results(results, data, threshold = 0.245)
+
+# 5. Business metrics: calculate costs and CLV
+costs <- calc_costs(data)
+
+# 6. Train final logistic model and predict churn probabilities
+final_logit <- glm(Churn ~ ., data = data, family = "binomial")
+final_probs <- predict(final_logit, newdata = data, type = "response")
+
+# 7. Apply rule-based retention decision
+rule <- rule_based_decision(
+  data,
+  costs$CLV,
+  costs$Cost_of_Service,
+  costs$Retention_Cost,
+  prob_churn = final_probs
+)
+
+summarize_rule_based_profit <- function(cost_data) {
+  retained <- cost_data %>% filter(Retention_Worth == "Yes")
+  
+  total_retention_cost    <- sum(retained$Retention_Cost, na.rm = TRUE)
+  total_expected_benefit  <- sum(retained$expected_benefit, na.rm = TRUE)
+  total_expected_profit   <- total_expected_benefit - total_retention_cost
+  customer_count          <- nrow(retained)
+  
+  summary_df <- data.frame(
+    Customers_Retained        = customer_count,
+    Total_Retention_Cost      = round(total_retention_cost, 2),
+    Total_Expected_Benefit    = round(total_expected_benefit, 2),
+    Total_Expected_Profit     = round(total_expected_profit, 2),
+    row.names = NULL
+  )
+  
+  return(summary_df)
+}
+
+# 8. Customer segmentation and cluster analysis
+segments <- segment_customers(rule$cost_data, data, n_clusters = 3)
+plot_cluster_pca(segments)
+print_cluster_summary_table(segments)
+
+# 9. Optimize retention within budget using LP
+budget_opt <- optimize_budget(rule$cost_data, budget = 250000)
+optimized_with_clusters <- budget_opt$solution_df %>%
+  left_join(segments$df %>% select(CLV, cluster_id), by = "CLV")
+
+# 10. Summarize optimized profit by cluster
+summarize_optimized_profit_by_cluster <- function(solution_df_with_clusters) {
+  df <- solution_df_with_clusters %>% filter(Retain_Optimized == 1)
+  
+  cluster_summary <- df %>%
+    group_by(cluster_id) %>%
+    summarise(
+      Customers_Retained     = n(),
+      Total_Retention_Cost   = round(sum(Retention_Cost, na.rm = TRUE), 2),
+      Total_Expected_Benefit = round(sum(expected_benefit, na.rm = TRUE), 2),
+      Total_Expected_Profit  = round(sum(expected_benefit - Retention_Cost, na.rm = TRUE), 2),
+      .groups = "drop"
+    ) %>%
+    arrange(desc(Total_Expected_Profit)) %>%
+    as.data.frame()
+  
+  return(cluster_summary)
+}
+
+# Get optimization summary
+summarize_optimized_profit_by_cluster(optimized_with_clusters)
+
+optimized_with_clusters %>%
+  filter(cluster_id == 2) %>%
+  summarise(
+    Total = n(),
+    Retainable = sum(expected_benefit > Retention_Cost),
+    Retained = sum(Retain_Optimized == 1)
+  )
+
+# 11. Retention funnel visualization
+plot_retention_funnel_from_outputs <- function(data, rule, budget_opt) {
+  
+  total_customers       <- nrow(data)
+  rule_based_retained   <- nrow(rule$cost_data %>% filter(Retention_Worth == "Yes"))
+  scenario1_retained    <- sum(budget_opt$solution_df$Retain_Optimized == 1)
+  
+  funnel_data <- data.frame(
+    Stage = factor(c(
+      "Total Customers",
+      "Identified Churners (Rule-Based)",
+      "Knapsack - Scenario 1"
+    ), levels = c(
+      "Total Customers",
+      "Identified Churners (Rule-Based)",
+      "Knapsack - Scenario 1"
+    )),
+    Customers = c(total_customers, rule_based_retained, scenario1_retained)
+  )
+  
+  ggplot(funnel_data, aes(x = Stage, y = Customers, fill = Stage)) +
+    geom_col(width = 0.6) +
+    geom_text(aes(label = paste0(Customers, " customers")),
+              vjust = -0.5, fontface = "bold", size = 4.5) +
+    labs(
+      title = "Retention Funnel",
+      subtitle = "From Total Customers to Rule-Based and Knapsack Strategy",
+      x = NULL, y = "Number of Customers"
+    ) +
+    theme_minimal(base_size = 13) +
+    theme(
+      axis.text.x = element_text(angle = 15, hjust = 1),
+      legend.position = "none"
+    ) +
+    scale_fill_manual(values = c("#66c2a5", "#fc8d62", "#8da0cb"))
+}
+plot_retention_funnel_from_outputs(data, rule, budget_opt)
+
+
+
+
+
+
+
+
+
+
