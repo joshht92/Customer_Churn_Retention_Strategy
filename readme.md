@@ -1,6 +1,6 @@
-# Customer Retention Optimization with Churn Prediction
+# Customer Retention Optimization Strategy with Churn Prediction
 
-This repository contains a comprehensive analysis and optimization framework for targeted customer retention in a telecommunications context. Leveraging machine learning and optimization techniques, we predict customer churn risk, segment customers into actionable groups, and select retention targets under budget constraints to maximize profitability.
+This repository contains a comprehensive analysis and optimization framework for targeted customer retention in a telecommunications context. Leveraging machine learning and optimization techniques, I predict customer churn risk, segment customers into actionable groups, and select retention targets under budget constraints to maximize profitability.
 
 ## Table of Contents
 
@@ -26,45 +26,19 @@ In subscription-based industries, reducing customer churn directly impacts profi
 ## Project Structure
 
 ```
-├── data/                       # Raw and processed data files
-│   └── telco_customer_churn.csv
-├── notebooks/                  # Jupyter notebooks for each analysis step
-│   ├── 1_eda.ipynb             # Exploratory data analysis
-│   ├── 2_churn_model.ipynb     # Churn prediction modeling
-│   ├── 3_threshold_analysis.ipynb
-│   ├── 4_segmentation.ipynb
-│   ├── 5_retention_optimization.ipynb
-│   └── 6_results_and_report.ipynb
-├── src/                        # Supporting Python modules
-│   ├── data_processing.py
-│   ├── modeling.py
-│   └── optimization.py
-├── reports/                    # Generated outputs and visualizations
-│   └── Customer_Churn_Report.pdf
-├── requirements.txt            # Python dependencies
-└── README.md                   # Project overview (this file)
+├── data/                           # Store raw or cleaned datasets
+│   └── Telco-Customer-Churn.csv
+├── scripts/                        # Your main R scripts
+│   └── Customer_Churn_Final.R
+├── reports/                        # Reports and outputs
+│   └── Customer_Churn_Report-short.pdf
+├── README.md                       # Project overview and instructions
+└── .gitattributes                  # Git attribute settings
 ```
-
-## Installation
-
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/your-username/retention-optimization.git
-   cd retention-optimization
-   ```
-2. Create and activate a virtual environment:
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate
-   ```
-3. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
 
 ## Usage
 
-Notebooks are organized to follow the analysis workflow:
+R code is organized to follow the analysis workflow:
 
 1. **Exploratory Data Analysis**: `notebooks/1_eda.ipynb` examines summary statistics and initial patterns.
 2. **Churn Modeling**: `notebooks/2_churn_model.ipynb` trains and evaluates classification models.
@@ -73,13 +47,11 @@ Notebooks are organized to follow the analysis workflow:
 5. **Retention Optimization**: `notebooks/5_retention_optimization.ipynb` formulates and solves a knapsack problem under budget.
 6. **Results & Report**: `notebooks/6_results_and_report.ipynb` compiles findings and generates the final PDF report.
 
-Execute cells sequentially to reproduce the analysis and update parameters as needed.
+Execute each line sequentially to reproduce the analysis and update parameters as needed.
 
 ## Data
 
 - **telco\_customer\_churn.csv**: Contains customer demographics, subscription details, service usage, financials, and churn indicator.
-
-> **Note**: Do not commit sensitive or proprietary data to the repository. Store large datasets externally if needed.
 
 ## Methodology
 
