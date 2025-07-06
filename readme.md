@@ -40,14 +40,14 @@ In subscription-based industries, reducing customer churn directly impacts profi
 
 R code is organized to follow the analysis workflow:
 
-1. **Exploratory Data Analysis**: `notebooks/1_eda.ipynb` examines summary statistics and initial patterns.
-2. **Churn Modeling**: `notebooks/2_churn_model.ipynb` trains and evaluates classification models.
-3. **Threshold Analysis**: `notebooks/3_threshold_analysis.ipynb` explores trade-offs and selects a classification threshold.
-4. **Customer Segmentation**: `notebooks/4_segmentation.ipynb` uncovers behavioral clusters via K-means.
-5. **Retention Optimization**: `notebooks/5_retention_optimization.ipynb` formulates and solves a knapsack problem under budget.
-6. **Results & Report**: `notebooks/6_results_and_report.ipynb` compiles findings and generates the final PDF report.
+1. **Exploratory Data Analysis**: Examines summary statistics and initial patterns.
+2. **Churn Modeling**: Trains and evaluates classification models.
+3. **Threshold Analysis**: Explores trade-offs and selects a classification threshold.
+4. **Customer Segmentation**: Uncovers behavioral clusters via K-means.
+5. **Retention Optimization**: Formulates and solves a knapsack problem under budget.
+6. **Results & Report**: Compiles findings and generates the final PDF report.
 
-Execute each line sequentially to reproduce the analysis and update parameters as needed.
+In the R code, execute each line sequentially to reproduce the analysis and update parameters as needed.
 
 ## Data
 
