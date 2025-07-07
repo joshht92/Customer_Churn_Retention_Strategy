@@ -85,7 +85,7 @@ eda_plots <- function(data) {
 # 4. Fit multiple models with cross-validation and collect evaluation metrics
 #    - Models: Logistic Regression, Naive Bayes, CART, k-NN
 #    - Metrics: Accuracy, Recall, Precision, F1, AUC
-fit_models_cv <- function(data, folds, thresholds = list(logit = 0.2451, nb = 0.234, cart = 0.25, knn_k = 9)) {
+fit_models_cv <- function(data, folds, thresholds = list(logit = 0.48, nb = 0.48, cart = 0.48, knn_k = 9)) {
   n <- nrow(data)
   total_prob <- numeric(n) # Store predicted probabilities for logistic regression across folds
   evals <- list(logit = list(), nb = list(), cart = list(), knn = list())
@@ -94,8 +94,15 @@ fit_models_cv <- function(data, folds, thresholds = list(logit = 0.2451, nb = 0.
     idx <- folds[[i]]
     train <- data[-idx, ]; test <- data[idx, ]
     
+    
+    # Compute class weights: inverse frequency
+    class_freq <- table(train$Churn)
+    weights <- ifelse(train$Churn == 1,
+                      1 / class_freq["1"],
+                      1 / class_freq["0"])
+    
     # Logistic Regression
-    m1 <- glm(Churn ~ ., data = train, family = "binomial")
+    m1 <- glm(Churn ~ ., data = train, family = "binomial", weights = weights)
     p1 <- predict(m1, test, type = "response"); total_prob[idx] <- p1
     c1 <- confusionMatrix(factor(ifelse(p1 > thresholds$logit, 1, 0), levels = c(0,1)), test$Churn, positive = "1")
     evals$logit[[i]] <- c(
@@ -159,28 +166,34 @@ plot_all_results <- function(results, data, threshold) {
   models <- c("Logistic Regression","Naive Bayes","CART","k-NN")
   dfs <- list(results$logit, results$nb, results$cart, results$knn)
   
-  # Create summary table
+  # Create summary table with mean and std dev (recall)
   summary_df <- map_df(seq_along(dfs), function(i) {
     df <- dfs[[i]]
     tibble(
-      Model = models[i],
-      Accuracy  = round(mean(df$Accuracy),  3),
-      Recall    = round(mean(df$Recall),    3),
-      Precision = round(mean(df$Precision), 3),
-      F1_Score  = round(mean(df$F1),        3),
-      AUC       = round(mean(df$AUC),       3)
+      Model    = models[i],
+      Accuracy = round(mean(df$Accuracy), 3),
+      Recall   = round(mean(df$Recall), 3),
+      Precision= round(mean(df$Precision), 3),
+      F1_Score = round(mean(df$F1), 3),
+      AUC      = round(mean(df$AUC), 3),
+      `Std Dev (Recall)` = round(sd(df$Recall), 3)
     )
   })
+  
+  # Print and optionally return
   tbl <- tableGrob(summary_df, rows = NULL)
   grid.newpage(); grid.draw(tbl)
   
-  # ROC curve for logistic regression
+  # Also print to console (optional)
+  print(summary_df)
+  
+  # --- existing ROC plot ---
   roc_obj <- roc(data$Churn, results$total_prob)
   plot(roc_obj, main = paste("ROC Curve - Logistic Regression | AUC =", round(auc(roc_obj), 3)),
        col = "#2c7fb8", lwd = 2)
   abline(a = 0, b = 1, lty = 2, col = "gray")
   
-  # F1 score vs. threshold
+  # --- existing F1 vs threshold plot ---
   thresholds_seq <- seq(0.01, 0.99, by = 0.01)
   f1_scores <- sapply(thresholds_seq, function(t) {
     preds <- ifelse(results$total_prob > t, 1, 0)
@@ -211,14 +224,12 @@ plot_all_results <- function(results, data, threshold) {
     theme_minimal()
   print(f1_plot)
   
-  # Final confusion matrix at chosen threshold
+  # --- existing confusion matrix plot ---
   preds_final <- ifelse(results$total_prob > threshold, 1, 0)
   cm_final <- table(Predicted = preds_final, Actual = data$Churn)
-  
   cm_df <- as.data.frame(cm_final)
   names(cm_df) <- c("Predicted", "Actual", "Freq")
   
-  #Confusion Matrix Plot
   cm_plot <- ggplot(cm_df, aes(x = Actual, y = Predicted)) +
     geom_tile(aes(fill = Freq), color = "white") +
     geom_text(aes(label = Freq), size = 6, fontface = "bold") +
@@ -227,7 +238,10 @@ plot_all_results <- function(results, data, threshold) {
     theme_minimal()
   print(cm_plot)
   
+  # Optional: return summary dataframe for programmatic access
+  return(summary_df)
 }
+
 
 
 #----------------------------#
@@ -407,7 +421,7 @@ eda_plots(data)
 
 # 4. Fit CV models and evaluate performance
 results <- fit_models_cv(data, folds)
-plot_all_results(results, data, threshold = 0.245)
+plot_all_results(results, data, threshold = 0.48)
 
 # 5. Business metrics: calculate costs and CLV
 costs <- calc_costs(data)
